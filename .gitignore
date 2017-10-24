@@ -1,0 +1,7 @@
+*.pyc
+*.pyo
+*.so
+*.o
+auth_code
+ref_token
+creds.json
