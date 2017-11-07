@@ -177,7 +177,7 @@ def print_dir(file_list, names, is_root=False):
 			
 			print ("%25r" %dir_struct[val]),
 			if (index+1) % 3 == 0:
-				print ("\n")
+				print ("")
 
 # Run main if module is run alone
 if __name__ == '__main__':
