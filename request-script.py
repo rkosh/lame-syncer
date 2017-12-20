@@ -119,14 +119,32 @@ class GDrive (object):
 		return access_token
 
 	def get_response(self, data_url):
-		resp = requests.get(data_url+'?access_token='+self.ACCESS_TOKEN)
+		if '?' in data_url:
+			data_url = data_url+'&access_token='+self.ACCESS_TOKEN
+		else:
+			data_url = data_url+'?access_token='+self.ACCESS_TOKEN
+		resp = requests.get(data_url)
 		file_list = resp.json()
+
+		nextToken = file_list.get('nextPageToken')
+		new_list = file_list
+		# Get the complete file list
+		if nextToken:
+			print("Retriveing the list wait..."),
+			while True:
+				new_resp = requests.get(new_list['nextLink']+'&access_token='+self.ACCESS_TOKEN)
+				new_list = new_resp.json()
+				for item in new_list['items']:
+					file_list['items'].append(item)
+				print("\b..."),
+				if not new_list.get('nextPageToken'):
+					break
 		return file_list
 
 
-	# TODO - Make a single class to share vairables and data between them instead of this mumbo jumbp
-	# This is an important one! 
-	def open(self):
+	# TODO - Make a single class to share vairables and data between them instead of this mumbo jumbo
+	# This is an important one!
+	def _init(self):
 
 		creds = self.load_credentials('creds.json')
 		if creds.get('error'):
@@ -148,87 +166,142 @@ class GDrive (object):
 		drive_interface.start()
 
 
+avail_cmds = {} # All the available commands go inside this dict along with their handles
+# Decorator for user input
+def user_input(input_fn):
+	if not input_fn.__name__ in avail_cmds:
+		avail_cmds[input_fn.__name__] = input_fn
+
+	def wrapper(*args, **kwargs):
+		input_fn(*args, **kwargs)
+		return wrapper
+
+
+
 class Interface (object):
 
 	def __init__(self, file_list, names, handle):
 		self.file_list = file_list
 		self.names = names
 		self.gdrive = handle
+		self.current_folder = None
+		self.visited = []	# Keep Tracks of Visited folders (Helpful for cd ..)
 
 	def list_dirs(self, file_list, folder=None):
 		dir_struct = {}
-		if not folder:
-			folder = "My Drive"
-			for item in file_list['items']:
-				if item['parents']:
-					if item['parents'][0]['isRoot'] and not item['labels']['trashed']:
-						filename = self.names[item['id']] 
-						ext = item['mimeType']
-						if ext == "application/vnd.google-apps.folder":
-							filename += '/'
-						dir_struct[item['id']] = filename 
-		else:
-			for item in file_list['items']:
+		# TODO: Merge Repetition
+		for item in file_list['items']:
+			if not folder:
+				if item['parents'] and item['parents'][0]['isRoot'] and not item['labels']['trashed']:
+					filename = self.names[item['id']] 
+					ext = item['mimeType']
+					if ext == "application/vnd.google-apps.folder":
+						filename += '/'
+					dir_struct[item['id']] = filename 
+			else:
 				if not item['labels']['trashed']:
-					filename = names[item['id']] 
+					filename = self.names[item['id']] 
 					ext = item['mimeType']
 					if ext == "application/vnd.google-apps.folder":
 						filename += '/'
 					dir_struct[item['id']] = filename
-
+		
+		if not folder:
+			folder = 'My Drive'
+			self.current_folder = []
+		else:
+			self.current_folder = folder
 
 		print("\n" + "%45s" %folder + "\n"+ "-"*80)
 
 		for index, val in enumerate(dir_struct):
-			# TODO - .encode(utf8) is a poor hack
+			# TODO: remove encode(utf8) as this is a poor hack
 			print ("%25s" %dir_struct[val].encode('utf8')),
 			if (index+1) % 3 == 0:
 				print ("")
 
 	def start(self):
 		self.list_dirs(self.file_list)
-		
-		cmds = ["cd", "dl", "rm", "up", "mv", "q"]
 
 		while True:
-			print("\n\ncommands:")
-			print("cd - Change Directory,   dl - Download File, rm - Delete/Remove File")
-			print("up - Upload File,   mv - Move/Rename File, q - Quit Terminal Drive")
+			print("\n\nAvailable Commands:")
+			print("cd - Change Directory,   dl - Download File,      rm - Delete/Remove File")
+			print("up - Upload File,        mv - Move/Rename File,   wc - Watch File \n(Press 'q' to quit)")
 			usr_inp = raw_input("> ")
 
-			# User input must always contain the  
-			cmd = usr_inp.split(" ")
-			
-			if cmd[0].lower() in cmds:
-				if cmd[0] == "cd" :
-					self.change_dir(cmd[1])
-				elif cmd[0] == "q" :
+			# User input must always contain the space after command 
+			cmd = usr_inp.split(" ", 1)
+
+			if cmd[0] in avail_cmds:
+				avail_cmds[cmd[0]](cmd[1])
+			else:
+				if cmd[0] == 'q':
 					break
+				print("Sorry Wrong Command! Try Again")
+
+	@user_input
+	def cd(self, folder):
+
+		if not folder:	# List all directories
+			self.list_dirs(self.file_list)
+			return
+		elif "." in folder:	# Check if user inputted dot notation
+			if not folder == ".":
+				if self.visited:
+					# Simple single/double dot notation is used 
+					# up_level = folder.split("/")
+					#Implement the up logic. Make use of up_level.length
+					self.current_folder = None
+					prev_dir = self.visited.pop()
+					self.cd(prev_dir)	# Single level
 				else:
-					self.list_dirs(self.file_list)
-			else:
-				print("Sorry Wrong Command! Exiting")
-				break
-
-	def change_dir(self, folder):
-
-		if "." in folder:
-			if folder == ".":
-				# Same folder level
-				print("Same folder")
-			else:
-				# Simple single/double dot notation is used 
-				up_level = folder.split("/")
-				#Implement the up logic. Make use of up_level.length
+					self.cd(None) # Go to Root
+					self.visited = []
+			return
+		item_id = ''
+		data_list = {'items': []}
 
 		for item in self.file_list['items']:
-			if item['mimeType'] == 'application/vnd.google-apps.folder' and self.names[item['id']] == folder:
-				data_list = self.gdrive.get_response('https://www.googleapis.com/drive/v2/files/'+item['id'])
-				self.list_dirs(data_list, folder)
+			if item['mimeType'] == 'application/vnd.google-apps.folder' and self.names.get(item['id']) == folder:
+				item_id = item['id']
 				break
+		if item_id:
+			for item in self.file_list['items']:
+				if item['parents'][0]['id'] == item_id:
+					data_list['items'].append(item)
+			if self.current_folder:
+				self.visited.append(self.current_folder)
+			self.list_dirs(data_list, folder)
+		else:
+			print("No such directory :( Please try again")
+
+	@user_input
+	def dl(self, filename):
+		for item in self.file_list['items']:
+			if item['mimeType'] != 'application/vnd.google-apps.folder' and self.names.get(item['id']) == filename:
+				# TODO: Seperate thread spawning for the Downloads
+				if(item['downloadUrl']):
+					if Utility.download_file(downloadUrl, filename):
+						print("File saved successfully as %s " %filename)
+				else:
+					print("Unable to retrieve download url :(")
+				break
+
+
+class Utility(object):
+
+	@classmethod
+	def download_file(cls, url, filename):
+	    r = requests.get(url, stream=True)
+	    # TODO: Exception Handling
+	    with open(filename, 'wb') as f:
+	    	for chunk in r.iter_content(chunk_size=1024):
+	    		print("#"),
+	    		f.write(chunk)
+		return True
 
 
 # Run main if module is run alone
 if __name__ == '__main__':
 	my_drive = GDrive()
-	my_drive.open()
+	my_drive._init()
